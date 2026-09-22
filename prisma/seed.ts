@@ -1,0 +1,150 @@
+import bcrypt from "bcrypt";
+import { AppointmentStatus } from "../lib/generated/prisma/client";
+import { prisma } from "../lib/db/prisma";
+
+const PASSWORD = "patient-demo";
+
+const DOCTORS = {
+  priya: "Dr. Priya Shah",
+  james: "Dr. James Okonkwo",
+  elena: "Dr. Elena Vasquez",
+} as const;
+
+const PATIENTS = [
+  {
+    email: "maya.patel@clinic.example",
+    name: "Maya Patel",
+    dob: "1990-03-12",
+    appointments: [
+      {
+        doctor: DOCTORS.priya,
+        offsetDays: 1,
+        hour: 10,
+        minute: 0,
+        status: AppointmentStatus.scheduled,
+        reason: "Annual physical",
+      },
+      {
+        doctor: DOCTORS.james,
+        offsetDays: 4,
+        hour: 14,
+        minute: 30,
+        status: AppointmentStatus.scheduled,
+        reason: "Knee follow-up",
+      },
+    ],
+  },
+  {
+    email: "luis.romero@clinic.example",
+    name: "Luis Romero",
+    dob: "1985-11-02",
+    appointments: [
+      {
+        doctor: DOCTORS.elena,
+        offsetDays: 2,
+        hour: 9,
+        minute: 15,
+        status: AppointmentStatus.scheduled,
+        reason: "Skin check",
+      },
+      {
+        doctor: DOCTORS.priya,
+        offsetDays: -6,
+        hour: 15,
+        minute: 0,
+        status: AppointmentStatus.cancelled,
+        reason: "Cold symptoms",
+      },
+    ],
+  },
+  {
+    email: "hannah.berg@clinic.example",
+    name: "Hannah Berg",
+    dob: "1998-07-21",
+    appointments: [
+      {
+        doctor: DOCTORS.james,
+        offsetDays: 6,
+        hour: 11,
+        minute: 0,
+        status: AppointmentStatus.scheduled,
+        reason: "Vaccination",
+      },
+      {
+        doctor: DOCTORS.elena,
+        offsetDays: -14,
+        hour: 13,
+        minute: 0,
+        status: AppointmentStatus.completed,
+        reason: "New patient visit",
+      },
+    ],
+  },
+] as const;
+
+async function main() {
+  const passwordHash = await bcrypt.hash(PASSWORD, 12);
+  const emails = PATIENTS.map((patient) => patient.email);
+
+  await prisma.user.deleteMany({
+    where: { email: { in: [...emails] } },
+  });
+
+  for (const patient of PATIENTS) {
+    await prisma.user.create({
+      data: {
+        email: patient.email,
+        passwordHash,
+        patient: {
+          create: {
+            name: patient.name,
+            dob: utcDate(patient.dob),
+            appointments: {
+              create: patient.appointments.map((appointment) => ({
+                doctor: appointment.doctor,
+                datetime: atUtc(
+                  appointment.offsetDays,
+                  appointment.hour,
+                  appointment.minute,
+                ),
+                status: appointment.status,
+                reason: appointment.reason,
+              })),
+            },
+          },
+        },
+      },
+    });
+  }
+
+  const appointments = await prisma.appointment.count();
+  console.log(
+    `Seeded ${PATIENTS.length} patients, ${Object.keys(DOCTORS).length} doctors, and ${appointments} appointments.`,
+  );
+  console.log(`Sign in with password ${PASSWORD}:`);
+  for (const patient of PATIENTS) {
+    console.log(`- ${patient.email} (${patient.name})`);
+  }
+}
+
+function utcDate(value: string): Date {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function atUtc(offsetDays: number, hour: number, minute: number): Date {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  date.setUTCHours(hour, minute, 0, 0);
+  return date;
+}
+
+main()
+  .then(async () => {
+    await prisma.$disconnect();
+  })
+  .catch(async (error: unknown) => {
+    console.error(error);
+    await prisma.$disconnect();
+    process.exit(1);
+  });

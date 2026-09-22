@@ -13,3 +13,39 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  patient      Patient?
+}
+
+model Patient {
+  id           String        @id @default(cuid())
+  userId       String        @unique
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  dob          DateTime      @db.Date
+  appointments Appointment[]
+}
+
+enum AppointmentStatus {
+  scheduled
+  cancelled
+  completed
+}
+
+model Appointment {
+  id        String            @id @default(cuid())
+  patientId String
+  patient   Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor    String
+  datetime  DateTime
+  status    AppointmentStatus
+  reason    String
+
+  @@index([patientId])
+  @@index([doctor, datetime])
+}
