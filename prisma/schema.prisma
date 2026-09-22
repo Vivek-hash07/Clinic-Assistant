@@ -26,9 +26,10 @@ model Patient {
   id           String        @id @default(cuid())
   userId       String        @unique
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name         String
-  dob          DateTime      @db.Date
-  appointments Appointment[]
+  name             String
+  dob              DateTime          @db.Date
+  appointments     Appointment[]
+  conversationLogs ConversationLog[]
 }
 
 enum AppointmentStatus {
@@ -48,4 +49,17 @@ model Appointment {
 
   @@index([patientId])
   @@index([doctor, datetime])
+}
+
+/// Full agent turns for eval and debugging. Mem0 stores the curated memory separately.
+model ConversationLog {
+  id               String   @id @default(cuid())
+  patientId        String
+  patient          Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  userMessage      String
+  assistantMessage String
+  transcript       Json
+
+  @@index([patientId, createdAt])
 }

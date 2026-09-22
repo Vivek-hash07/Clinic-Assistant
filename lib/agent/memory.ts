@@ -18,8 +18,9 @@ export async function addMemory(messages: Message[], userId: string) {
   return getMemoryClient().add(messages, { userId });
 }
 
-export async function searchMemory(query: string, userId: string) {
+export async function searchMemory(query: string, userId: string, topK = 5) {
   return getMemoryClient().search(query, {
     filters: { user_id: userId },
+    topK,
   });
 }
