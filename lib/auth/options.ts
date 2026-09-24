@@ -3,6 +3,10 @@ import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/db/prisma";
 
+// Derive the auth origin from the request host. Next.js sets
+// x-forwarded-host and x-forwarded-proto, including http://localhost on any port.
+process.env.AUTH_TRUST_HOST ??= "true";
+
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
   pages: {

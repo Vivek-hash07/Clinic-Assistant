@@ -55,7 +55,6 @@ Fill in `.env`:
 - `OPENROUTER_JUDGE_MODEL` — judge, default `openai/gpt-4o` (must be stronger than the agent)
 - `MEM0_API_KEY` — [Mem0 API keys](https://app.mem0.ai/dashboard/api-keys)
 - `NEXTAUTH_SECRET` — `openssl rand -base64 32`
-- `NEXTAUTH_URL` — `http://localhost:3000` locally, or the deployed origin in production
 
 Apply the schema, generate the client, and load the demo clinic:
 
