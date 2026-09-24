@@ -1,11 +1,12 @@
 import { addMemory, searchMemory } from "@/lib/agent/memory";
 import { buildSystemPrompt } from "@/lib/agent/systemPrompt";
-import { TOOL_DEFINITIONS, executeTool, type ToolResult } from "@/lib/agent/tools";
+import { TOOL_DEFINITIONS, executeTool, hasConfirmedChange, type ToolResult } from "@/lib/agent/tools";
 import { prisma } from "@/lib/db/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
-import { completeWithTools, type ModelMessage } from "@/lib/openrouter";
+import { completeWithTools, completeWithToolsStream, type ModelMessage } from "@/lib/openrouter";
 
 const MAX_TOOL_ROUNDS = 4;
+const MUTATING_TOOLS = new Set(["bookAppointment", "cancelAppointment", "rescheduleAppointment"]);
 
 export type ChatTurn = {
   role: "user" | "assistant";
@@ -38,6 +39,8 @@ export async function runAgent(input: {
   toolFault?: { tool: string; summary: string };
   /** Eval-only. Keeps one scenario's Mem0 notes off the real chart. */
   memoryUserId?: string;
+  /** Chat UI. Receives text tokens from the final reply only. */
+  onDelta?: (text: string) => void;
 }): Promise<AgentTurnResult> {
   const memoryUserId = input.memoryUserId ?? input.patientId;
   const memories = await loadMemories(memoryUserId, input.message);
@@ -59,10 +62,16 @@ export async function runAgent(input: {
   let reply = "";
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-    const assistant = await completeWithTools({
-      messages,
-      tools: TOOL_DEFINITIONS,
-    });
+    const assistant = input.onDelta
+      ? await completeWithToolsStream({
+          messages,
+          tools: TOOL_DEFINITIONS,
+          onDelta: input.onDelta,
+        })
+      : await completeWithTools({
+          messages,
+          tools: TOOL_DEFINITIONS,
+        });
     messages.push(assistant);
 
     if (!assistant.tool_calls?.length) {
@@ -76,7 +85,17 @@ export async function runAgent(input: {
         input.toolFault && input.toolFault.tool === call.function.name
           ? input.toolFault
           : undefined;
-      const result = fault
+      const premature =
+        !fault &&
+        MUTATING_TOOLS.has(call.function.name) &&
+        !hasConfirmedChange(priorAssistantMessage, input.message);
+      const result = premature
+        ? {
+            ok: false as const,
+            summary:
+              "Not called. Ask the patient to confirm the exact details, including the appointment id if they named one. Call this tool only after their next message agrees. Nothing was changed.",
+          }
+        : fault
         ? { ok: false as const, summary: fault.summary }
         : args === undefined
           ? {
@@ -87,10 +106,22 @@ export async function runAgent(input: {
               patientId: input.patientId,
               latestUserMessage: input.message,
               priorAssistantMessage,
+              userMessages: [
+                ...input.history.filter((turn) => turn.role === "user").map((turn) => turn.content),
+                input.message,
+              ],
             });
+      if (premature) {
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          content: JSON.stringify(result),
+        });
+        continue;
+      }
       toolTrace.push({
         name: call.function.name,
-        arguments: args ?? call.function.arguments,
+        arguments: result.appliedArguments ?? args ?? call.function.arguments,
         result,
       });
       messages.push({

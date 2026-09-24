@@ -126,6 +126,104 @@ export async function completeWithTools(input: {
   };
 }
 
+type StreamChunk = {
+  choices?: Array<{
+    delta?: {
+      content?: unknown;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  }>;
+};
+
+/** Streams the final text. Tool-call rounds are assembled and not forwarded. */
+export async function completeWithToolsStream(input: {
+  messages: ModelMessage[];
+  tools: ToolDefinition[];
+  model?: string;
+  onDelta?: (text: string) => void;
+}): Promise<{ role: "assistant"; content: string | null; tool_calls?: ToolCall[] }> {
+  const response = await postChat({
+    model: input.model || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
+    messages: input.messages,
+    tools: input.tools,
+    stream: true,
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(
+      `OpenRouter request failed (${response.status}): ${body.slice(0, 500)}`,
+    );
+  }
+  if (!response.body) {
+    throw new Error("OpenRouter returned no stream");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let sawTool = false;
+  const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      let chunk: StreamChunk;
+      try {
+        chunk = JSON.parse(data) as StreamChunk;
+      } catch {
+        continue;
+      }
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) continue;
+      if (delta.tool_calls?.length) {
+        sawTool = true;
+        for (const call of delta.tool_calls) {
+          const index = call.index ?? 0;
+          const current = toolCalls[index] ?? { id: "", name: "", arguments: "" };
+          if (call.id) current.id = call.id;
+          if (call.function?.name) current.name += call.function.name;
+          if (typeof call.function?.arguments === "string") {
+            current.arguments += call.function.arguments;
+          }
+          toolCalls[index] = current;
+        }
+      }
+      if (typeof delta.content === "string" && delta.content && !sawTool) {
+        content += delta.content;
+        input.onDelta?.(delta.content);
+      }
+    }
+  }
+
+  const calls = toolCalls
+    .filter((call) => call.name)
+    .map((call, index): ToolCall => ({
+      id: call.id || `call_${index}`,
+      type: "function",
+      function: { name: call.name, arguments: call.arguments || "{}" },
+    }));
+
+  return {
+    role: "assistant",
+    content: content.trim() || null,
+    tool_calls: calls.length > 0 ? calls : undefined,
+  };
+}
+
 async function postChat(body: unknown): Promise<Response> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");

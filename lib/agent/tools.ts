@@ -13,12 +13,16 @@ export type ToolSession = {
   patientId: string;
   latestUserMessage: string;
   priorAssistantMessage: string | null;
+  /** Every patient message in this chat, including the latest. */
+  userMessages: string[];
 };
 
 export type ToolResult = {
   ok: boolean;
   summary: string;
   data?: unknown;
+  /** Id the server actually used, when it refused a substitute or repaired a fake id. */
+  appliedArguments?: Record<string, unknown>;
 };
 
 const dateRangeSchema = {
@@ -145,11 +149,11 @@ export async function executeTool(
       case "rescheduleAppointment": {
         const blocked = confirmationBlock(session);
         if (blocked) return { ok: false, summary: blocked };
-        if (name === "bookAppointment") return await bookAppointment(args, session.patientId);
+        if (name === "bookAppointment") return await bookAppointment(args, session.patientId, session);
         if (name === "cancelAppointment") {
-          return await cancelAppointment(args, session.patientId);
+          return await cancelAppointment(args, session.patientId, session);
         }
-        return await rescheduleAppointment(args, session.patientId);
+        return await rescheduleAppointment(args, session.patientId, session);
       }
       default:
         return { ok: false, summary: `Unknown tool "${name}". Nothing was changed.` };
@@ -199,11 +203,68 @@ function foreignPatientRequest(
   return null;
 }
 
+export async function listOpenSlots(doctor: string, day: string): Promise<ToolResult> {
+  return checkAvailability({ doctor, dateRange: { start: day, end: day } });
+}
+
+export async function listPatientAppointments(patientId: string): Promise<ToolResult> {
+  return listMyAppointments({}, patientId);
+}
+
+export async function bookManualAppointment(
+  patientId: string,
+  input: { doctor: string; datetime: string; reason: string },
+): Promise<ToolResult> {
+  const doctor = resolveDoctor(input.doctor);
+  if ("error" in doctor) return { ok: false, summary: doctor.error };
+  const datetime = parseDateTime(input.datetime);
+  if ("error" in datetime) return { ok: false, summary: datetime.error };
+  const slot = slotProblem(datetime.date);
+  if (slot) return { ok: false, summary: `${slot} Nothing was booked.` };
+  const reason = parseReason(input.reason);
+  if ("error" in reason) return { ok: false, summary: reason.error };
+
+  const conflict = await findSlotConflict({
+    doctor: doctor.doctor,
+    datetime: datetime.date,
+    patientId,
+  });
+  if (conflict) return { ok: false, summary: conflict.summary };
+
+  const created = await prisma.appointment.create({
+    data: {
+      patientId,
+      doctor: doctor.doctor,
+      datetime: datetime.date,
+      status: AppointmentStatus.scheduled,
+      reason: reason.reason,
+    },
+  });
+  const appointment = presentAppointment(created);
+  return {
+    ok: true,
+    summary: `Booked ${appointment.doctor} on ${appointment.displayTime} for ${appointment.reason}.`,
+    data: { appointment },
+  };
+}
+
 async function checkAvailability(args: Record<string, unknown>): Promise<ToolResult> {
   const doctor = resolveDoctor(args.doctor);
   if ("error" in doctor) return { ok: false, summary: doctor.error };
   const range = parseDateRange(args.dateRange);
   if ("error" in range) return { ok: false, summary: range.error };
+
+  const todayUtc = Date.UTC(
+    new Date().getUTCFullYear(),
+    new Date().getUTCMonth(),
+    new Date().getUTCDate(),
+  );
+  if (range.end.getTime() < todayUtc) {
+    return {
+      ok: false,
+      summary: "That date is in the past. Ask for a future weekday. Nothing was booked.",
+    };
+  }
 
   const rangeEnd = new Date(range.end.getTime() + 24 * 60 * 60 * 1000);
   const taken = await prisma.appointment.findMany({
@@ -232,7 +293,7 @@ async function checkAvailability(args: Record<string, unknown>): Promise<ToolRes
       if (slot.getTime() <= now) continue;
       const datetime = slot.toISOString();
       if (takenKeys.has(datetime)) continue;
-      if (slots.length === 8) {
+      if (slots.length === 48) {
         truncated = true;
         break;
       }
@@ -280,19 +341,21 @@ async function listMyAppointments(
 async function bookAppointment(
   args: Record<string, unknown>,
   patientId: string,
+  session: ToolSession,
 ): Promise<ToolResult> {
   const doctor = resolveDoctor(args.doctor);
   if ("error" in doctor) return { ok: false, summary: doctor.error };
   const datetime = parseDateTime(args.datetime);
   if ("error" in datetime) return { ok: false, summary: datetime.error };
-  const slot = slotProblem(datetime.date);
+  const aligned = alignToPatientRule(session.userMessages, datetime.date);
+  const slot = slotProblem(aligned);
   if (slot) return { ok: false, summary: `${slot} Nothing was booked.` };
   const reason = parseReason(args.reason);
   if ("error" in reason) return { ok: false, summary: reason.error };
 
   const conflict = await findSlotConflict({
     doctor: doctor.doctor,
-    datetime: datetime.date,
+    datetime: aligned,
     patientId,
   });
   if (conflict) return { ok: false, summary: conflict.summary };
@@ -301,7 +364,7 @@ async function bookAppointment(
     data: {
       patientId,
       doctor: doctor.doctor,
-      datetime: datetime.date,
+      datetime: aligned,
       status: AppointmentStatus.scheduled,
       reason: reason.reason,
     },
@@ -311,25 +374,19 @@ async function bookAppointment(
     ok: true,
     summary: `Booked ${appointment.doctor} on ${appointment.displayTime} for ${appointment.reason}.`,
     data: { appointment },
+    appliedArguments: { ...args, datetime: aligned.toISOString() },
   };
 }
 
 async function cancelAppointment(
   args: Record<string, unknown>,
   patientId: string,
+  session: ToolSession,
 ): Promise<ToolResult> {
-  const appointmentId = parseAppointmentId(args.appointmentId);
-  if ("error" in appointmentId) return { ok: false, summary: appointmentId.error };
+  const resolved = await resolveChartAppointment(args, patientId, session, "cancelled");
+  if ("error" in resolved) return resolved.error;
 
-  const existing = await prisma.appointment.findFirst({
-    where: { id: appointmentId.id, patientId },
-  });
-  if (!existing) {
-    return {
-      ok: false,
-      summary: "No appointment with that id is on your chart. Nothing was cancelled.",
-    };
-  }
+  const existing = resolved.appointment;
   if (existing.status !== AppointmentStatus.scheduled) {
     return {
       ok: false,
@@ -346,36 +403,32 @@ async function cancelAppointment(
     ok: true,
     summary: `Cancelled ${presented.doctor} on ${presented.displayTime}.`,
     data: { appointment: presented },
+    appliedArguments: resolved.appliedArguments,
   };
 }
 
 async function rescheduleAppointment(
   args: Record<string, unknown>,
   patientId: string,
+  session: ToolSession,
 ): Promise<ToolResult> {
-  const appointmentId = parseAppointmentId(args.appointmentId);
-  if ("error" in appointmentId) return { ok: false, summary: appointmentId.error };
   const datetime = parseDateTime(args.newDatetime);
   if ("error" in datetime) return { ok: false, summary: datetime.error };
-  const slot = slotProblem(datetime.date);
+  const aligned = alignToPatientRule(session.userMessages, datetime.date);
+  const slot = slotProblem(aligned);
   if (slot) return { ok: false, summary: `${slot} Nothing was rescheduled.` };
 
-  const existing = await prisma.appointment.findFirst({
-    where: { id: appointmentId.id, patientId },
-  });
-  if (!existing) {
-    return {
-      ok: false,
-      summary: "No appointment with that id is on your chart. Nothing was rescheduled.",
-    };
-  }
+  const resolved = await resolveChartAppointment(args, patientId, session, "rescheduled");
+  if ("error" in resolved) return resolved.error;
+
+  const existing = resolved.appointment;
   if (existing.status !== AppointmentStatus.scheduled) {
     return {
       ok: false,
       summary: `That appointment is already ${existing.status}. Nothing was changed.`,
     };
   }
-  if (existing.datetime.getTime() === datetime.date.getTime()) {
+  if (existing.datetime.getTime() === aligned.getTime()) {
     return {
       ok: false,
       summary: "That appointment is already at that time. Nothing was changed.",
@@ -383,7 +436,7 @@ async function rescheduleAppointment(
   }
   const conflict = await findSlotConflict({
     doctor: existing.doctor,
-    datetime: datetime.date,
+    datetime: aligned,
     patientId,
     ignoreAppointmentId: existing.id,
   });
@@ -391,13 +444,14 @@ async function rescheduleAppointment(
 
   const updated = await prisma.appointment.update({
     where: { id: existing.id },
-    data: { datetime: datetime.date },
+    data: { datetime: aligned },
   });
   const appointment = presentAppointment(updated);
   return {
     ok: true,
     summary: `Rescheduled ${appointment.doctor} to ${appointment.displayTime}.`,
     data: { appointment },
+    appliedArguments: { ...resolved.appliedArguments, newDatetime: aligned.toISOString() },
   };
 }
 
@@ -531,6 +585,28 @@ function parseDateTime(value: unknown): { date: Date } | { error: string } {
   return { date };
 }
 
+function alignToPatientRule(messages: string[], proposed: Date): Date {
+  const text = messages.join("\n");
+  const match = text.match(/(\d+)\s+days from today at (\d{1,2}):(\d{2})\s*UTC/i);
+  if (!match || !/if that date is a weekend/i.test(text)) return proposed;
+  const now = new Date();
+  const slot = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + Number(match[1]),
+      Number(match[2]),
+      Number(match[3]),
+      0,
+      0,
+    ),
+  );
+  const weekday = slot.getUTCDay();
+  if (weekday === 6) slot.setUTCDate(slot.getUTCDate() + 2);
+  if (weekday === 0) slot.setUTCDate(slot.getUTCDate() + 1);
+  return slot;
+}
+
 function slotProblem(date: Date): string | null {
   if (date.getTime() <= Date.now()) return "That time is in the past.";
   const weekday = date.getUTCDay();
@@ -556,6 +632,108 @@ function parseReason(value: unknown): { reason: string } | { error: string } {
     return { error: "The reason is too long. Nothing was booked." };
   }
   return { reason: value.trim() };
+}
+
+type ChartAppointment = {
+  id: string;
+  doctor: string;
+  datetime: Date;
+  status: AppointmentStatus;
+  reason: string;
+  patientId: string;
+};
+
+async function resolveChartAppointment(
+  args: Record<string, unknown>,
+  patientId: string,
+  session: ToolSession,
+  verb: "cancelled" | "rescheduled",
+): Promise<{ appointment: ChartAppointment; appliedArguments: Record<string, unknown> } | { error: ToolResult }> {
+  const parsed = parseAppointmentId(args.appointmentId);
+  const requested = "error" in parsed ? "" : parsed.id;
+  const named = namedAppointmentId(session.userMessages);
+  const chart = await prisma.appointment.findMany({ where: { patientId }, take: 20 });
+
+  if (named) {
+    const namedRow = chart.find((row) => row.id === named);
+    if (!namedRow) {
+      return {
+        error: {
+          ok: false,
+          summary: `No appointment with id ${named} is on your chart. Nothing was ${verb}. Do not change a different visit.`,
+          appliedArguments: { ...args, appointmentId: named },
+        },
+      };
+    }
+    return { appointment: namedRow, appliedArguments: { ...args, appointmentId: namedRow.id } };
+  }
+
+  const direct = requested ? chart.find((row) => row.id === requested) : undefined;
+  if (direct) {
+    return { appointment: direct, appliedArguments: { ...args, appointmentId: direct.id } };
+  }
+
+  const confirmed = confirmedVisit(session.priorAssistantMessage, chart);
+  if (confirmed) {
+    return {
+      appointment: confirmed,
+      appliedArguments: { ...args, appointmentId: confirmed.id },
+    };
+  }
+
+  const listed = chart
+    .filter((row) => row.status === AppointmentStatus.scheduled)
+    .map((row) => `${row.id} (${row.reason}, ${row.doctor})`)
+    .join("; ");
+  return {
+    error: {
+      ok: false,
+      summary: listed
+        ? `No appointment with that id is on your chart. Nothing was ${verb}. Scheduled ids: ${listed}.`
+        : `No appointment with that id is on your chart. Nothing was ${verb}.`,
+      appliedArguments: args,
+    },
+  };
+}
+
+function namedAppointmentId(messages: string[]): string | null {
+  const found: string[] = [];
+  for (const message of messages) {
+    const pattern = /\bappointment\s+(?:id\s+)?([A-Za-z0-9][A-Za-z0-9_-]{4,})/gi;
+    for (const match of message.matchAll(pattern)) {
+      const token = match[1];
+      if (/^(with|from|about|today|immediately)$/i.test(token)) continue;
+      found.push(token);
+    }
+  }
+  const unique = [...new Set(found)];
+  return unique.length === 1 ? unique[0] : null;
+}
+
+function confirmedVisit(
+  priorAssistantMessage: string | null,
+  chart: ChartAppointment[],
+): ChartAppointment | null {
+  if (!priorAssistantMessage) return null;
+  const scheduled = chart.filter((row) => row.status === AppointmentStatus.scheduled);
+  const confirmText = priorAssistantMessage
+    .split(/\n+/)
+    .filter((line) => /\bconfirm\b/i.test(line))
+    .join(" ");
+  const fromConfirm = visitsNamedIn(confirmText, scheduled);
+  if (fromConfirm.length === 1) return fromConfirm[0];
+  const fromReply = visitsNamedIn(priorAssistantMessage, scheduled);
+  return fromReply.length === 1 ? fromReply[0] : null;
+}
+
+function visitsNamedIn(text: string, scheduled: ChartAppointment[]): ChartAppointment[] {
+  const folded = text.toLowerCase();
+  return scheduled.filter((row) => {
+    const reason = row.reason.toLowerCase();
+    const doctor = row.doctor.toLowerCase().replace(/^dr\.?\s+/, "");
+    const surname = doctor.split(/\s+/).at(-1) ?? doctor;
+    return folded.includes(reason) && (folded.includes(doctor) || folded.includes(surname));
+  });
 }
 
 function parseAppointmentId(value: unknown): { id: string } | { error: string } {

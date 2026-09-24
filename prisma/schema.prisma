@@ -30,6 +30,20 @@ model Patient {
   dob              DateTime          @db.Date
   appointments     Appointment[]
   conversationLogs ConversationLog[]
+  chatThreads      ChatThread[]
+}
+
+/// One sidebar conversation. Messages stay on this row; ConversationLog remains the eval transcript.
+model ChatThread {
+  id        String   @id @default(cuid())
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  title     String
+  messages  Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId, updatedAt])
 }
 
 enum AppointmentStatus {
