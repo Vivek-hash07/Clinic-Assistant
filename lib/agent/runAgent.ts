@@ -20,7 +20,13 @@ export type ToolTraceEntry = {
 
 export type AgentTurnResult = {
   reply: string;
-  tools: Array<{ name: string; ok: boolean; summary: string }>;
+  tools: Array<{
+    name: string;
+    arguments: unknown;
+    ok: boolean;
+    summary: string;
+    data?: unknown;
+  }>;
 };
 
 export async function runAgent(input: {
@@ -28,8 +34,13 @@ export async function runAgent(input: {
   patientName: string;
   history: ChatTurn[];
   message: string;
+  /** Eval-only. Replaces that tool's result and writes nothing. */
+  toolFault?: { tool: string; summary: string };
+  /** Eval-only. Keeps one scenario's Mem0 notes off the real chart. */
+  memoryUserId?: string;
 }): Promise<AgentTurnResult> {
-  const memories = await loadMemories(input.patientId, input.message);
+  const memoryUserId = input.memoryUserId ?? input.patientId;
+  const memories = await loadMemories(memoryUserId, input.message);
   const priorAssistantMessage = lastAssistantText(input.history);
   const messages: ModelMessage[] = [
     {
@@ -61,10 +72,15 @@ export async function runAgent(input: {
 
     for (const call of assistant.tool_calls) {
       const args = parseArguments(call.function.arguments);
-      const result =
-        args === undefined
+      const fault =
+        input.toolFault && input.toolFault.tool === call.function.name
+          ? input.toolFault
+          : undefined;
+      const result = fault
+        ? { ok: false as const, summary: fault.summary }
+        : args === undefined
           ? {
-              ok: false,
+              ok: false as const,
               summary: "Tool arguments were not valid JSON. Nothing was changed.",
             }
           : await executeTool(call.function.name, args, {
@@ -112,7 +128,7 @@ export async function runAgent(input: {
         { role: "user", content: input.message },
         { role: "assistant", content: reply },
       ],
-      input.patientId,
+      memoryUserId,
     );
   } catch (error) {
     const memoryError = error instanceof Error ? error.message : String(error);
@@ -127,8 +143,10 @@ export async function runAgent(input: {
     reply,
     tools: toolTrace.map((entry) => ({
       name: entry.name,
+      arguments: entry.arguments,
       ok: entry.result.ok,
       summary: entry.result.summary,
+      data: entry.result.data,
     })),
   };
 }

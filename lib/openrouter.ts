@@ -22,14 +22,7 @@ export async function completeChat(
     throw new Error("OPENROUTER_API_KEY is not set");
   }
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ model, messages }),
-  });
+  const response = await postChat({ model, messages });
 
   if (!response.ok) {
     const body = await response.text();
@@ -91,17 +84,10 @@ export async function completeWithTools(input: {
     throw new Error("OPENROUTER_API_KEY is not set");
   }
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: input.model || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
-      messages: input.messages,
-      tools: input.tools,
-    }),
+  const response = await postChat({
+    model: input.model || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
+    messages: input.messages,
+    tools: input.tools,
   });
 
   if (!response.ok) {
@@ -138,6 +124,36 @@ export async function completeWithTools(input: {
     content: readContent(message.content),
     tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
   };
+}
+
+async function postChat(body: unknown): Promise<Response> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(90_000),
+      });
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new Error(`OpenRouter request failed (${response.status})`);
+        await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("OpenRouter request failed");
 }
 
 function readContent(content: unknown): string | null {

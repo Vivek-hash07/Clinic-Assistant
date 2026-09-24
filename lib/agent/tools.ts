@@ -163,12 +163,18 @@ export async function executeTool(
   }
 }
 
+export function hasConfirmedChange(
+  priorAssistantMessage: string | null,
+  latestUserMessage: string,
+): boolean {
+  const asked = priorAssistantMessage ? /\bconfirm\b/i.test(priorAssistantMessage) : false;
+  return asked && isAffirmative(latestUserMessage);
+}
+
 function confirmationBlock(session: ToolSession): string | null {
-  const asked = session.priorAssistantMessage
-    ? /\bconfirm\b/i.test(session.priorAssistantMessage)
-    : false;
-  const agreed = isAffirmative(session.latestUserMessage);
-  if (asked && agreed) return null;
+  if (hasConfirmedChange(session.priorAssistantMessage, session.latestUserMessage)) {
+    return null;
+  }
   return "Not changed. Ask the patient to confirm the exact details, wait for their agreement, and only then call this tool. Do not claim the appointment changed.";
 }
 
