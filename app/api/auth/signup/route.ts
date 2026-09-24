@@ -1,6 +1,21 @@
 import { registerPatient } from "@/lib/auth/register";
 
 export async function POST(request: Request) {
+  try {
+    return await createAccount(request);
+  } catch (error) {
+    console.error(
+      "signup failed",
+      error instanceof Error ? error.message : error,
+    );
+    return Response.json(
+      { error: "Could not create the account." },
+      { status: 500 },
+    );
+  }
+}
+
+async function createAccount(request: Request) {
   let body: unknown;
   try {
     body = await request.json();
