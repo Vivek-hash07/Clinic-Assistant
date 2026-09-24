@@ -5,10 +5,9 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider      = "prisma-client"
-  output        = "../lib/generated/prisma"
-  // Vercel builds on a different Linux image than the Node serverless runtime.
-  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+  provider   = "prisma-client"
+  output     = "../lib/generated/prisma"
+  engineType = "client"
 }
 
 datasource db {
