@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
 import { useState } from "react";
 import { buttonClassName, fieldClassName } from "@/components/auth-shell";
 
@@ -48,19 +47,6 @@ export function SignUpForm() {
     if (!response.ok) {
       setError(payload?.error ?? "Could not create the account.");
       setFieldErrors(payload?.fieldErrors ?? {});
-      setPending(false);
-      return;
-    }
-
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-      callbackUrl: "/chat",
-    });
-
-    if (!result || result.error) {
-      setError("Account created, but signing in failed. Try the sign-in page.");
       setPending(false);
       return;
     }

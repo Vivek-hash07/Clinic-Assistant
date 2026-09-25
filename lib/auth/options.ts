@@ -1,7 +1,6 @@
-import bcrypt from "bcrypt";
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { prisma } from "@/lib/db/prisma";
+import { signInWithPassword } from "@/lib/auth/credentials";
 
 // Derive the auth origin from the request host. Next.js sets
 // x-forwarded-host and x-forwarded-proto, including http://localhost on any port.
@@ -20,24 +19,17 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        const email = credentials?.email?.trim().toLowerCase();
-        const password = credentials?.password;
-        if (!email || !password) return null;
-
-        const user = await prisma.user.findUnique({
-          where: { email },
-          include: { patient: true },
-        });
-        if (!user?.patient) return null;
-
-        const valid = await bcrypt.compare(password, user.passwordHash);
-        if (!valid) return null;
+        const result = await signInWithPassword(
+          credentials?.email,
+          credentials?.password,
+        );
+        if (!result.ok) return null;
 
         return {
-          id: user.id,
-          email: user.email,
-          name: user.patient.name,
-          patientId: user.patient.id,
+          id: result.user.id,
+          email: result.user.email,
+          name: result.user.name,
+          patientId: result.user.patientId,
         };
       },
     }),

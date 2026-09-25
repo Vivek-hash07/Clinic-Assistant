@@ -1,4 +1,8 @@
 import { registerPatient } from "@/lib/auth/register";
+import { createPatientSession } from "@/lib/auth/session-cookie";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
@@ -41,6 +45,13 @@ async function createAccount(request: Request) {
       { status: result.status },
     );
   }
+
+  await createPatientSession({
+    id: result.userId,
+    email: result.email,
+    name: result.name,
+    patientId: result.patientId,
+  });
 
   return Response.json(
     { ok: true, email: result.email, patientId: result.patientId },

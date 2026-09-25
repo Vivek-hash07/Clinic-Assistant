@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
 import { useState } from "react";
 import { buttonClassName, fieldClassName } from "@/components/auth-shell";
 
@@ -23,15 +22,20 @@ export function SignInForm({
     setError(null);
 
     const formData = new FormData(event.currentTarget);
-    const result = await signIn("credentials", {
-      email: String(formData.get("email") ?? ""),
-      password: String(formData.get("password") ?? ""),
-      redirect: false,
-      callbackUrl,
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: formData.get("email"),
+        password: formData.get("password"),
+      }),
     });
+    const payload = (await response.json().catch(() => null)) as {
+      error?: string;
+    } | null;
 
-    if (!result || result.error) {
-      setError("Invalid email or password.");
+    if (!response.ok) {
+      setError(payload?.error ?? "Invalid email or password.");
       setPending(false);
       return;
     }

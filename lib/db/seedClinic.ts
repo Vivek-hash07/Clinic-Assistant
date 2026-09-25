@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import { hashPassword } from "@/lib/auth/password";
 import { AppointmentStatus } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/db/prisma";
 
@@ -83,7 +83,7 @@ const PATIENTS = [
 ] as const;
 
 export async function seedClinic(): Promise<{ patients: number; appointments: number }> {
-  const passwordHash = await bcrypt.hash(PASSWORD, 12);
+  const passwordHash = await hashPassword(PASSWORD);
   const emails = PATIENTS.map((patient) => patient.email);
 
   await prisma.user.deleteMany({

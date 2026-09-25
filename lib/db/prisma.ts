@@ -7,13 +7,26 @@ function hasChatThreads(client: PrismaClient): boolean {
   return typeof (client as { chatThread?: { findMany?: unknown } }).chatThread?.findMany === "function";
 }
 
+/** Neon appends libpq-only params. node-postgres forwards them and the pooler rejects the connection on Vercel. */
+function serverlessConnectionString(raw: string): string {
+  const url = new URL(raw);
+  url.searchParams.delete("channel_binding");
+  url.searchParams.delete("sslmode");
+  return url.toString();
+}
+
 function createPrisma(): PrismaClient {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     throw new Error("DATABASE_URL is not set");
   }
 
-  const adapter = new PrismaPg({ connectionString, max: 1 });
+  const adapter = new PrismaPg({
+    connectionString: serverlessConnectionString(connectionString),
+    max: 1,
+    connectionTimeoutMillis: 15_000,
+    ssl: { rejectUnauthorized: false },
+  });
   return new PrismaClient({ adapter });
 }
 

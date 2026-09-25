@@ -1,5 +1,5 @@
-import bcrypt from "bcrypt";
 import { prisma } from "@/lib/db/prisma";
+import { hashPassword } from "@/lib/auth/password";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -11,7 +11,13 @@ export type FieldErrors = {
 };
 
 export type RegisterResult =
-  | { ok: true; patientId: string; email: string }
+  | {
+      ok: true;
+      userId: string;
+      patientId: string;
+      email: string;
+      name: string;
+    }
   | { ok: false; status: number; error?: string; fieldErrors?: FieldErrors };
 
 export async function registerPatient(input: {
@@ -46,7 +52,7 @@ export async function registerPatient(input: {
     return { ok: false, status: 400, fieldErrors };
   }
 
-  const passwordHash = await bcrypt.hash(password, 12);
+  const passwordHash = await hashPassword(password);
 
   try {
     const user = await prisma.user.create({
@@ -61,7 +67,9 @@ export async function registerPatient(input: {
         },
       },
       select: {
-        patient: { select: { id: true } },
+        id: true,
+        email: true,
+        patient: { select: { id: true, name: true } },
       },
     });
 
@@ -73,7 +81,13 @@ export async function registerPatient(input: {
       };
     }
 
-    return { ok: true, patientId: user.patient.id, email };
+    return {
+      ok: true,
+      userId: user.id,
+      patientId: user.patient.id,
+      email: user.email,
+      name: user.patient.name,
+    };
   } catch (error) {
     if (isUniqueConstraint(error)) {
       return {
