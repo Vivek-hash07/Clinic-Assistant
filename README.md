@@ -2,7 +2,7 @@
 
 A single-clinic scheduling assistant. You sign in as a patient, then ask the assistant to list, book, cancel, or reschedule visits. It only acts on the chart linked to that account.
 
-**Live app:** [https://clinic-assistant-livid.vercel.app/](https://clinic-assistant-livid.vercel.app/)
+**Live app:** [https://clinic-assistant-iu2z1gwsi-viveksarvaiya1873-9672s-projects.vercel.app/](https://clinic-assistant-iu2z1gwsi-viveksarvaiya1873-9672s-projects.vercel.app/)
 
 Sign in with a demo account below, or create one. New accounts start with an empty chart.
 
@@ -71,11 +71,11 @@ npm run sanity
 
 Password for every seeded patient: `patient-demo`
 
-| Email | Name |
-| --- | --- |
-| maya.patel@clinic.example | Maya Patel |
-| luis.romero@clinic.example | Luis Romero |
-| hannah.berg@clinic.example | Hannah Berg |
+| Email                                                           | Name        |
+| --------------------------------------------------------------- | ----------- |
+| [maya.patel@clinic.example](mailto:maya.patel@clinic.example)   | Maya Patel  |
+| [luis.romero@clinic.example](mailto:luis.romero@clinic.example) | Luis Romero |
+| [hannah.berg@clinic.example](mailto:hannah.berg@clinic.example) | Hannah Berg |
 
 Each chart already has appointments, so cancel and reschedule have a real visit to act on. Sign-up at `/auth/signup` creates a new user and an empty linked chart.
 
